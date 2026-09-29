@@ -1,0 +1,170 @@
+{
+  "arch": "gfx942",
+  "gpu": "AMD Instinct MI300X",
+  "rocm": "7.2.0",
+  "source": "/work1/sinclair/sairajatg/workloads/mi300x_rocm72_counters.txt",
+  "notes": [
+    "Each pass is one rocprofv3 --pmc invocation (one full application run).",
+    "Pass sizing: <=8 SQ, <=4 TCC, <=4 TCP, <=2 GRBM counters per pass.",
+    "GRBM_GUI_ACTIVE is in every pass so each pass can be normalised by busy cycles on its own.",
+    "GRBM_GUI_ACTIVE / GRBM_COUNT are per XCC and rocprofv3 sums them over the 8 XCCs: divide by 8 to get GPU cycles (GUI_cycles). Verified: gives ~1815 MHz (job 433875).",
+    "Unit factors verified against job 433875: SQ_WAVE_CYCLES needs x4 (quad-cycles); SQ_BUSY_CU_CYCLES must NOT get x4; SQ_ACTIVE_INST_VALU is one quad-cycle per wave instruction; SQ_INST_CYCLES_SALU unverified (lower bound).",
+    "MI300X: 8 XCCs, CU_NUM=304, SIMD_NUM=1216, wave size 64, 512 VGPRs per SIMD lane (VGPR+AGPR unified), 64 KB LDS per CU, MFMA MOPS unit = 512 FLOPs, peak engine clock 2100 MHz.",
+    "MFMA: only FP64/FP32 MOPS are collected (all LAMMPS needs for FLOPs). SQ_VALU_MFMA_BUSY_CYCLES catches any other MFMA use: if it is > 0 while MOPS_F64 and MOPS_F32 are 0, low-precision MFMA ran and needs its own pass.",
+    "Memory is L2 -> memory traffic at the TCC_EA0 interface, before the 256 MB Infinity Cache: an upper bound on HBM traffic. Metrics are named mem_* rather than HBM_*.",
+    "Aggregation: sum counters and durations per kernel name within a pass; combine passes only through per-kernel rates (per ns) or per-launch averages. Launch IDs do not match across passes (QEq iteration counts vary ~0.5%).",
+    "duration_ns = End_Timestamp - Start_Timestamp per launch (counter CSV or kernel trace). GPU busy % of wall time comes from the power run's kernel trace, not from these passes.",
+    "Full explanation of every formula: post_processing_formulae.md."
+  ],
+  "passes": [
+    {
+      "name": "01_fp64_flops",
+      "label": "FP64 FLOPs: vector (VALU) + matrix (MFMA) FP64 ops, MFMA busy",
+      "category": "Compute / VALU / MFMA",
+      "counters": [
+        "SQ_INSTS_VALU_ADD_F64",
+        "SQ_INSTS_VALU_MUL_F64",
+        "SQ_INSTS_VALU_FMA_F64",
+        "SQ_INSTS_VALU_TRANS_F64",
+        "SQ_INSTS_VALU_MFMA_MOPS_F64",
+        "SQ_VALU_MFMA_BUSY_CYCLES",
+        "SQ_INSTS_VALU",
+        "SQ_WAVES",
+        "GRBM_GUI_ACTIVE"
+      ]
+    },
+    {
+      "name": "02_fp32_int_ops",
+      "label": "FP32 FLOPs (VALU + MFMA) and integer / conversion ops",
+      "category": "Compute / VALU / MFMA",
+      "counters": [
+        "SQ_INSTS_VALU_ADD_F32",
+        "SQ_INSTS_VALU_MUL_F32",
+        "SQ_INSTS_VALU_FMA_F32",
+        "SQ_INSTS_VALU_TRANS_F32",
+        "SQ_INSTS_VALU_MFMA_MOPS_F32",
+        "SQ_INSTS_VALU_INT32",
+        "SQ_INSTS_VALU_INT64",
+        "SQ_INSTS_VALU_CVT",
+        "GRBM_GUI_ACTIVE"
+      ]
+    },
+    {
+      "name": "03_fp16_instmix",
+      "label": "FP16 vector ops + instruction mix (scalar, memory, LDS)",
+      "category": "Compute",
+      "counters": [
+        "SQ_INSTS_VALU_ADD_F16",
+        "SQ_INSTS_VALU_MUL_F16",
+        "SQ_INSTS_VALU_FMA_F16",
+        "SQ_INSTS_VALU_TRANS_F16",
+        "SQ_INSTS_SALU",
+        "SQ_INSTS_VMEM_RD",
+        "SQ_INSTS_VMEM_WR",
+        "SQ_INSTS_LDS",
+        "GRBM_GUI_ACTIVE"
+      ]
+    },
+    {
+      "name": "04_cu_util",
+      "label": "CU utilization: GPU/CU/VALU busy, thread divergence, wave residency",
+      "category": "CU utilization",
+      "counters": [
+        "SQ_BUSY_CU_CYCLES",
+        "SQ_BUSY_CYCLES",
+        "SQ_WAVE_CYCLES",
+        "SQ_ACTIVE_INST_VALU",
+        "SQ_THREAD_CYCLES_VALU",
+        "SQ_ACTIVE_INST_ANY",
+        "SQ_INST_CYCLES_SALU",
+        "SQ_WAVES",
+        "GRBM_GUI_ACTIVE",
+        "GRBM_COUNT"
+      ]
+    },
+    {
+      "name": "05_hbm_read",
+      "label": "HBM reads: L2 -> memory read requests and bytes, incl. uncached",
+      "category": "Memory",
+      "counters": [
+        "TCC_EA0_RDREQ_sum",
+        "TCC_EA0_RDREQ_32B_sum",
+        "TCC_BUBBLE_sum",
+        "TCC_EA0_RD_UNCACHED_32B_sum",
+        "GRBM_GUI_ACTIVE"
+      ]
+    },
+    {
+      "name": "06_hbm_write",
+      "label": "HBM writes: L2 -> memory write requests and bytes, incl. uncached and atomics",
+      "category": "Memory",
+      "counters": [
+        "TCC_EA0_WRREQ_sum",
+        "TCC_EA0_WRREQ_64B_sum",
+        "TCC_EA0_WR_UNCACHED_32B_sum",
+        "TCC_EA0_ATOMIC_sum",
+        "GRBM_GUI_ACTIVE"
+      ]
+    }
+  ],
+  "derived": {
+    "cycles": "duration_ns * clock_MHz / 1000; clock_MHz = mean power-run gfx_clock_MHz over samples taken while a kernel ran (formulae.md 4.2)",
+    "GUI_cycles": "GRBM_GUI_ACTIVE / 8   [check only: includes per-launch profiler cycles]",
+    "eff_clock_MHz": "GUI_cycles / duration_ns * 1000   [check of the /8; not a frequency]",
+    "clock_factor": "clock_MHz / 2100",
+    "GPU_busy_pct": "100 * union(kernel intervals) / (last end - first start)   [power-run kernel trace]",
+    "CU_busy_frac": "SQ_BUSY_CU_CYCLES / (cycles * 304)",
+    "VALUBusy_pct": "100 * SQ_ACTIVE_INST_VALU / (cycles * 304)",
+    "VALU_threads": "SQ_THREAD_CYCLES_VALU / SQ_ACTIVE_INST_VALU",
+    "VALUUtilization_pct": "100 * VALU_threads / 64",
+    "waves_per_CU": "4 * SQ_WAVE_CYCLES / (cycles * 304)",
+    "Occupancy_pct": "100 * waves_per_CU / 32",
+    "max_waves_CU": "min(4 * min(8, floor(512 / vgpr_alloc)), floor(65536 / LDS_Block_Size) * ceil(wg_threads / 64), 32); vgpr_alloc = ceil8(ceil4(VGPR)+AGPR) if AGPR>0 else ceil8(VGPR); wg_threads = X*Y*Z",
+    "Occupancy_of_max_pct": "100 * waves_per_CU / max_waves_CU",
+    "Wave_issue_pct": "100 * SQ_ACTIVE_INST_ANY / SQ_WAVE_CYCLES",
+    "SALUBusy_pct": "100 * SQ_INST_CYCLES_SALU / (cycles * 304)   [lower bound; units unverified]",
+    "MfmaUtil_pct": "100 * SQ_VALU_MFMA_BUSY_CYCLES / (cycles * 1216)",
+    "FP64_VALU_FLOP": "64 * (SQ_INSTS_VALU_ADD_F64 + SQ_INSTS_VALU_MUL_F64 + 2*SQ_INSTS_VALU_FMA_F64 + SQ_INSTS_VALU_TRANS_F64)",
+    "FP64_TRANS_FLOP": "64 * SQ_INSTS_VALU_TRANS_F64",
+    "FP64_VALU_FLOP_useful": "per kernel: FP64_VALU_FLOP * VALUUtilization_pct / 100   [pass 1 x pass 4]",
+    "FP64_MFMA_FLOP": "512 * SQ_INSTS_VALU_MFMA_MOPS_F64",
+    "FP64_FLOP": "FP64_VALU_FLOP + FP64_MFMA_FLOP",
+    "FP32_VALU_FLOP": "64 * (SQ_INSTS_VALU_ADD_F32 + SQ_INSTS_VALU_MUL_F32 + 2*SQ_INSTS_VALU_FMA_F32 + SQ_INSTS_VALU_TRANS_F32)",
+    "FP32_MFMA_FLOP": "512 * SQ_INSTS_VALU_MFMA_MOPS_F32",
+    "FP32_FLOP": "FP32_VALU_FLOP + FP32_MFMA_FLOP",
+    "FP16_VALU_FLOP": "64 * (SQ_INSTS_VALU_ADD_F16 + SQ_INSTS_VALU_MUL_F16 + 2*SQ_INSTS_VALU_FMA_F16 + SQ_INSTS_VALU_TRANS_F16)",
+    "TFLOPs": "FLOP / duration_ns / 1000",
+    "FP64_VALU_peak_pct": "100 * TFLOPs_FP64_VALU / 81.7",
+    "FP64_VALU_peak_clk_pct": "100 * TFLOPs_FP64_VALU / (81.7 * clock_factor)",
+    "FP64_MFMA_peak_pct": "100 * TFLOPs_FP64_MFMA / 163.4",
+    "FP32_MFMA_peak_pct": "100 * TFLOPs_FP32_MFMA / 163.4",
+    "FP64_share_pct": "100 * (SQ_INSTS_VALU_ADD_F64 + SQ_INSTS_VALU_MUL_F64 + SQ_INSTS_VALU_FMA_F64 + SQ_INSTS_VALU_TRANS_F64) / SQ_INSTS_VALU",
+    "inst_share_pct": "100 * SQ_INSTS_X / (SQ_INSTS_VALU + SQ_INSTS_SALU + SQ_INSTS_VMEM_RD + SQ_INSTS_VMEM_WR + SQ_INSTS_LDS)   [pass 1 x pass 3, via rates]",
+    "mem_read_bytes": "128*TCC_BUBBLE_sum + 64*(TCC_EA0_RDREQ_sum - TCC_BUBBLE_sum - TCC_EA0_RDREQ_32B_sum) + 32*TCC_EA0_RDREQ_32B_sum",
+    "read_128B_pct": "100 * TCC_BUBBLE_sum / TCC_EA0_RDREQ_sum",
+    "read_32B_pct": "100 * TCC_EA0_RDREQ_32B_sum / TCC_EA0_RDREQ_sum",
+    "mem_write_bytes": "32*(TCC_EA0_WRREQ_sum - TCC_EA0_WRREQ_64B_sum) + 64*TCC_EA0_WRREQ_64B_sum",
+    "atomic_req_pct": "100 * TCC_EA0_ATOMIC_sum / TCC_EA0_WRREQ_sum",
+    "atomic_bytes": "32 * TCC_EA0_ATOMIC_sum",
+    "uncached_read_bytes": "32 * TCC_EA0_RD_UNCACHED_32B_sum",
+    "uncached_write_bytes": "32 * TCC_EA0_WR_UNCACHED_32B_sum",
+    "read_BW_TBps": "mem_read_bytes / duration_ns[pass 5] / 1000",
+    "write_BW_TBps": "mem_write_bytes / duration_ns[pass 6] / 1000",
+    "mem_BW_TBps": "read_BW_TBps + write_BW_TBps",
+    "mem_BW_peak_pct": "100 * mem_BW_TBps / 5.3",
+    "AI_FP64": "(FP64_FLOP / duration_ns[pass 1]) / (mem_read_bytes / duration_ns[pass 5] + mem_write_bytes / duration_ns[pass 6])",
+    "ridge_FP64": "81.7 / 5.3",
+    "attainable_TFLOPs": "min(81.7, AI_FP64 * 5.3)",
+    "roofline_pct": "100 * TFLOPs_FP64 / attainable_TFLOPs"
+  },
+  "peak_MI300X": {
+    "clock_MHz": 2100,
+    "FP64_VALU_TFLOPS": 81.7,
+    "FP32_VALU_TFLOPS": 163.4,
+    "FP64_MFMA_TFLOPS": 163.4,
+    "FP32_MFMA_TFLOPS": 163.4,
+    "HBM_TBps": 5.3,
+    "notes": "FP64 VALU = 304 CU x 128 FLOP/clk x 2.1 GHz. FP32 VALU 163.4 assumes packed FP32; unpacked FP32 is 81.7. MFMA FP64/FP32 = 304 x 256 FLOP/clk x 2.1 GHz. Scale by (measured clock / 2100) for clock-adjusted peaks.",
+    "PEAK_MEM_BW_note": "HBM3 peak; the mem_* counters are measured before the Infinity Cache, so % of this peak is an upper bound on HBM use."
+  }
+}

@@ -1,0 +1,63 @@
+# workload.conf -- everything workload-specific for run_plain / run_pmc / run_power.
+# Sourced by bash inside the sbatch scripts. Copy, rename (e.g. myapp.conf), fill in.
+#
+# The sbatch scripts create one run folder per job, cd into it, call
+# stage_inputs, then call app_cmd and run "${APP_CMD[@]}".
+
+# ---- identity -----------------------------------------------------------
+WORKLOAD=myapp_case1                 # short tag used in file names (no spaces)
+WORKLOAD_DESC="MyApp case1, 1x MI300X, <input size / steps / precision>"
+
+# ---- where things live ----------------------------------------------------
+PROFILING_DIR=/path/to/workload/profiling   # copy of the skill's scripts/ (counters.json etc.)
+RESULTS_DIR=/path/to/workload/results       # run folders: plain-<jobid>, pmc-<jobid>, prof-<jobid>
+
+# ---- GPU count and launch layout -------------------------------------------
+# NGPUS=1 -> submit to mi3001x (one MI300X per node)
+# NGPUS=8 -> submit to mi3008x (8x MI300X per node):  sbatch -p mi3008x -n $NTASKS ...
+# (the cluster default partition is mi3501x = MI350, so always pass -p)
+NGPUS=1
+# srun tasks. MPI app with one rank per GPU: NTASKS=$NGPUS.
+# One process driving all GPUs (e.g. torchrun/accelerate launching its own
+# workers, or a single-process multi-GPU code): NTASKS=1.
+NTASKS=1
+# 1 = give each srun task its own GPU (ROCR_VISIBLE_DEVICES=$SLURM_LOCALID),
+# for MPI apps that do not pick a device per rank themselves. The partitions
+# have no GPU GRES, so Slurm does not bind GPUs on its own.
+BIND_GPU_PER_TASK=0
+# devices the power sampler reads (comma-separated)
+SAMPLE_GPUS=0                        # 8 GPUs: 0,1,2,3,4,5,6,7
+
+# ---- environment -----------------------------------------------------------
+MODULES=(rocm/7.2.0)                 # module load, in order
+ROCM_PATH=/opt/rocm-7.2.0
+
+# Power/frequency/temperature sampler (rocprofwrap_lt: wrapper.py + amd-smi-query)
+PROF_LT=/work1/sinclair/sairajatg/minos-sigmetrics26-artifact/rocprofwrap/rocprofwrap_lt
+SAMPLE_MS=1                          # requested interval; ~2.3 ms is achieved in practice
+
+# Files that must exist before anything runs (binary, inputs, ...)
+REQUIRED_FILES=(/path/to/binary)
+
+# grep -E pattern for the app's own timing line, shown in job summaries
+# (e.g. LAMMPS "Loop time of", PyTorch "it/s", a benchmark's "Time:")
+PERF_GREP="Time"
+
+# ---- inputs ----------------------------------------------------------------
+# Runs inside the per-job run folder. Link or copy inputs here so the app
+# writes nothing into the source tree. Leave empty if not needed.
+stage_inputs() {
+    :   # ln -sf /path/to/input.dat input.dat
+}
+
+# ---- the command -----------------------------------------------------------
+# Sets APP_CMD. $OUT_DIR is the folder this run's outputs go to; use it for
+# any log path the app takes. Do not include srun: the scripts add it.
+app_cmd() {
+    APP_CMD=(/path/to/binary --input input.dat --log "$OUT_DIR/app.log")
+}
+
+# Optional: environment for the app (OMP_NUM_THREADS, HIP_VISIBLE_DEVICES, ...)
+app_env() {
+    :
+}
