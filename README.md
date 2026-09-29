@@ -1,4 +1,4 @@
-# MI300X workload profiling
+# Benchmark Runner and Profiling Flow (Tailored for MI300x)
 
 A Claude Code skill and set of scripts for characterizing one GPU workload on
 AMD Instinct MI300X (gfx942, ROCm 7.2) Slurm nodes. For a given application it
