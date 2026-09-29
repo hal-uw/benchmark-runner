@@ -41,9 +41,9 @@ post-processing are the same for every workload.
 
 ## Two ways to use it
 
-**With Claude Code (recommended).** Claude Code finds skills in
-`.claude/skills/` in the repo (or in `~/.claude/skills/`) and loads this one
-when you ask it something like *"profile my app on MI300X"*, *"write the
+**With Claude Code (recommended).** This repo *is* the skill: `SKILL.md` sits
+at its root. Once it is linked into `~/.claude/skills/` (see
+[Installation](#installation)), Claude Code loads it when you ask it something like *"profile my app on MI300X"*, *"write the
 rocprofv3 sbatch for X"* or *"build power vectors for this run"*. Claude asks
 for the GPU count, input, paths and which stages you want. It then writes the
 `workload.conf`, checks it with dry runs, and gives you a runbook of `sbatch`
@@ -64,26 +64,46 @@ and formula.
 | Slurm cluster with MI300X nodes | Partitions `mi3001x` (1 GPU per node) and `mi3008x` (8 GPUs per node). The default partition on the cluster this was built on is `mi3501x` (MI350), so **always pass `-p`**. |
 | ROCm 7.2 | `module load rocm/7.2.0`, `ROCM_PATH=/opt/rocm-7.2.0`. Tested with `rocprofv3` 1.1.0. |
 | A gfx942 build of your app | HIP: `--offload-arch=gfx942`. Kokkos: `Kokkos_ARCH_AMD_GFX942=ON`. See `SKILL.md` Phase 1. |
-| `rocprofwrap_lt` (power sampler) | `wrapper.py` + `amd-smi-query`, from the MINOS SIGMETRICS'26 artifact (`minos-sigmetrics26-artifact/rocprofwrap/rocprofwrap_lt`). Point `PROF_LT` in the conf at it. Needed only for the power run. |
-| `minos-analysis` | `dendrogram_plot/dendrogram.py` is imported by `build_sampling_json.py` so the power vectors are binned exactly as the dendrogram expects. Pass `--dendrogram-dir`, or edit `DENDRO_DIR` at the top of the script. |
+| `rocprofwrap_lt` (power sampler) | **Bundled** in [`third_party/rocprofwrap_lt/`](third_party/rocprofwrap_lt/UPSTREAM.md): `wrapper.py` plus the `amd-smi-query` sampler, from [`hal-uw/rocprofwrap`](https://github.com/hal-uw/rocprofwrap) with edge/hotspot temperature columns added. Build `amd-smi-query` once (see [Installation](#installation)) and point `PROF_LT` in the conf at that folder. Needed only for the power run. |
 | Python ≥ 3.9 | `postprocess_pmc.py` and `check_counters.py` use only the standard library. `build_sampling_json.py` needs `numpy` and `pandas`. |
+| *Optional:* [`hal-uw/minos-analysis`](https://github.com/hal-uw/minos-analysis) (private; needs `hal-uw` access) | Not needed to build the power vectors. `build_sampling_json.py` implements the binning of [`dendrogram_plot/dendrogram.py`](https://github.com/hal-uw/minos-analysis/blob/main/dendrogram_plot/dendrogram.py) itself. If you have the repo, pass `--dendrogram-dir <clone>/dendrogram_plot` (or set `$DENDROGRAM_DIR`) to also recompute `inst_power` with `dendrogram.py` as a cross-check. That needs a `dendrogram.py` that reads the `inst_power_W` column (older versions read only `power_from_e`). |
 
 ---
 
 ## Installation
 
-With Claude Code, clone the repo; the skill loads automatically for sessions
-started inside the repo. To make it available everywhere, link it into your
-user skills:
+Clone the repo and link it into your Claude Code user skills. Claude Code looks
+for `~/.claude/skills/<name>/SKILL.md`, so the link name becomes the skill's
+folder name:
 
 ```bash
-ln -s "$PWD/.claude/skills/mi300x-workload-profiling" ~/.claude/skills/
+git clone https://github.com/hal-uw/benchmark-runner.git
+mkdir -p ~/.claude/skills
+ln -s "$PWD/benchmark-runner" ~/.claude/skills/mi300x-workload-profiling
 ```
+
+Start a new Claude Code session afterwards so it picks up the skill. A
+`git pull` in the clone updates the skill in place. (Cloning directly into
+`~/.claude/skills/mi300x-workload-profiling` works too.) If you only use the
+scripts by hand, the link isn't needed.
+
+For the power run, build the bundled sampler once. It needs ROCm's amd-smi
+library, so build it where ROCm 7.2 is installed:
+
+```bash
+module load rocm/7.2.0
+make -C benchmark-runner/third_party/rocprofwrap_lt ROCM_DIR=/opt/rocm-7.2.0
+# -> benchmark-runner/third_party/rocprofwrap_lt/amd-smi-query
+```
+
+Then set `PROF_LT=/path/to/benchmark-runner/third_party/rocprofwrap_lt` in each
+`workload.conf`. The binary is not tracked in git (`.gitignore`). Rebuild it
+after a ROCm upgrade.
 
 For each workload, copy the scripts into a profiling folder next to it:
 
 ```bash
-SKILL=/path/to/BenchmarkRunner/.claude/skills/mi300x-workload-profiling
+SKILL=/path/to/benchmark-runner
 mkdir -p <workload>/profiling
 cp $SKILL/scripts/* <workload>/profiling/
 cp <workload>/profiling/workload.conf.template <workload>/profiling/<tag>.conf
@@ -277,16 +297,18 @@ launches. Keep `RESULTS_DIR` **outside** the git repo.
 | `--label` | Display name stored in the JSON |
 | `--per-gpu` | Also write one vector per GPU (multi-GPU runs; the default pools all GPUs) |
 | `--no-trim` | Keep samples from outside the kernel window (normally dropped) |
-| `--dendrogram-dir` | Folder containing `dendrogram.py` |
+| `--dendrogram-dir` | Optional. Folder containing `minos-analysis` `dendrogram.py`, used to cross-check `inst_power` (default `$DENDROGRAM_DIR`; unset means no cross-check) |
 | `--out` | Output path |
 
 The JSON has a `description` header (sampling logic, window, clock alignment,
 bin edges) and one key per vector: `inst_power`, `socket_power`,
-`gfx_frequency` and `hotspot_temp`. `inst_power` is computed by
-`calculate_power_distribution()` from `dendrogram.py` itself. It bins raw
-samples with no smoothing, as a fraction of TDP (the rated power limit), in
-bins from 0.5 to 2.0 × TDP. That keeps it directly comparable with
-`app_vectors.json`.
+`gfx_frequency` and `hotspot_temp`. All of them are binned with the algorithm
+of `calculate_power_distribution()` in `minos-analysis`'s `dendrogram.py`: raw
+samples with no smoothing and, for power, a fraction of TDP (the rated power
+limit, 750 W) in 0.1-wide bins from 0.5 to 2.0 × TDP. That keeps `inst_power`
+directly comparable with `app_vectors.json`. The `cross_check` field says
+whether `dendrogram.py` was also run and matched. Without `--dendrogram-dir`
+it reads `none`; the vectors are the same either way.
 
 ---
 
@@ -389,12 +411,17 @@ with this pass. Without it, the script falls back to FP64/FP32/FP16.
 | Job lands on MI350 nodes | `-p` was left out. The default partition is `mi3501x`. |
 | All 8 ranks use GPU 0 | Set `BIND_GPU_PER_TASK=1`. |
 | CU busy > 1 or waves/CU above the limit in `report.md` warnings | The clock from the power run differs from the PMC runs (power-throttled workload). Read the warning and treat those kernels' utilization as approximate. |
-| `build_sampling_json.py` can't import `dendrogram` | Pass `--dendrogram-dir /path/to/minos-analysis/dendrogram_plot`. |
+| `run_power.sbatch` reports `amd-smi-query` missing | Build it: `make -C third_party/rocprofwrap_lt ROCM_DIR=/opt/rocm-7.2.0`, and check `PROF_LT` points at that folder. |
+| No `hotspot_temp` vector (`skipped: column hotspot_temp_C not in CSV`) | The run used an upstream `rocprofwrap_lt` without temperature columns. Point `PROF_LT` at the bundled copy. |
+| `no dendrogram.py in …` | `--dendrogram-dir` or `$DENDROGRAM_DIR` points at the wrong folder. Fix it, or unset it to skip the cross-check. |
+| `KeyError: 'power_from_e'` from `dendrogram.py` | That `dendrogram.py` predates `inst_power_W` support. Drop `--dendrogram-dir` (the vectors don't need it) or use a version that reads `inst_power_W`. |
 | Power samples and kernels don't line up | Check `clock_ref.txt` and the job summary: both should start a few seconds after the same reference value. |
 
 ---
 
 ## File layout
+
+All paths are relative to the repo root.
 
 ```
 SKILL.md                         instructions Claude Code loads (also a full human guide)
@@ -410,6 +437,9 @@ scripts/
   postprocess_pmc.py             per-kernel / whole-run metrics -> CSV, JSON, report.md
   build_sampling_json.py         binned power/frequency/temperature vectors
   make_runbook.sh                RUNBOOK_<tag>.md with every command filled in
+third_party/
+  rocprofwrap_lt/                vendored power sampler: wrapper.py, power_query.cpp, Makefile,
+                                 UPSTREAM.md (source + local changes), local-changes.patch
 examples/
   lammps_hns16812.conf           worked config (LAMMPS HNS 16x8x12, 466,944 atoms)
   RUNBOOK_hns16812.md            runbook generated from it

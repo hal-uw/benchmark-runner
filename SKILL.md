@@ -24,6 +24,8 @@ scripts/
                            + top_kernels.csv (kernels covering 90% of GPU time)
   build_sampling_json.py   power/frequency/temperature vectors (dendrogram.py binning)
   make_runbook.sh          RUNBOOK_<tag>.md: the user's commands, in order, filled in
+third_party/rocprofwrap_lt/     vendored power sampler (hal-uw/rocprofwrap + temperature
+                                columns); build once: make ROCM_DIR=/opt/rocm-7.2.0
 examples/lammps_hns16812.conf   worked config
 examples/RUNBOOK_hns16812.md    runbook generated from it
 references/counters_gfx942.md   why each counter, pass design, unit checks
@@ -197,9 +199,13 @@ python3 build_sampling_json.py results/prof-<jobid> --label "<Display name>"
 - `build_sampling_json.py` produces a simple JSON: a `description` header
   (sampling logic, window, clock alignment, vector creation, bin edges) and one
   key per vector (`inst_power`, `socket_power`, `gfx_frequency`,
-  `hotspot_temp`). `inst_power` comes from `calculate_power_distribution()` in
-  `minos-analysis/dendrogram_plot/dendrogram.py` itself, so it is comparable
-  with `app_vectors.json`. Samples are trimmed to the kernel window.
+  `hotspot_temp`). Every vector uses the binning of
+  `calculate_power_distribution()` in `minos-analysis/dendrogram_plot/dendrogram.py`
+  (raw samples, no smoothing, bin_size 0.1 x TDP for power), so `inst_power` is
+  comparable with `app_vectors.json`. `dendrogram.py` is optional: with
+  `--dendrogram-dir` (or `$DENDROGRAM_DIR`) the script also recomputes
+  `inst_power` with it and stops on a mismatch; the JSON's `cross_check` field
+  records which happened. Samples are trimmed to the kernel window.
   Multi-GPU: vectors pool all GPUs; `--per-gpu` adds per-GPU vectors.
 - **Always do the top-kernel analysis.** `top_kernels.csv` (and the "Kernels
   covering 90% of GPU time" section of `report.md`) lists the fewest kernels

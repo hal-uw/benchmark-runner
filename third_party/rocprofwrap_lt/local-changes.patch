@@ -1,0 +1,70 @@
+diff --git a/rocprofwrap_lt/README.md b/rocprofwrap_lt/README.md
+index 9042213..78517d7 100644
+--- a/rocprofwrap_lt/README.md
++++ b/rocprofwrap_lt/README.md
+@@ -87,6 +87,8 @@ CSV content includes:
+ - `current_socket_power_W`
+ - `inst_power_W`
+ - `gfx_clock_MHz`
++- `edge_temp_C`
++- `hotspot_temp_C`
+ 
+ The sampler also prints one metadata line before the CSV header (device id, interval, energy counter resolution).
+ 
+@@ -102,6 +104,7 @@ The C++ program uses AMD SMI to:
+ - Read energy counters (`amdsmi_get_energy_count`)
+ - Read socket power (`amdsmi_get_power_info`)
+ - Read GFX clock frequency (`amdsmi_get_clk_freq`)
++- Read edge and hotspot/junction temperature (`amdsmi_get_temp_metric`, best-effort: unsupported sensors fall back to NaN rather than aborting the sampler)
+ - Output samples as CSV at a fixed interval (`-i`)
+ 
+ It computes `inst_power_W` from the energy counter delta:
+diff --git a/rocprofwrap_lt/power_query.cpp b/rocprofwrap_lt/power_query.cpp
+index fd028af..90cd898 100644
+--- a/rocprofwrap_lt/power_query.cpp
++++ b/rocprofwrap_lt/power_query.cpp
+@@ -150,7 +150,8 @@ int main(int argc, char **argv) {
+   std::cout << "device_id=" << opt.device_id
+             << " interval_ms=" << opt.interval_ms
+             << " counter_resolution_uJ=" << counter_resolution << "\n";
+-  std::cout << "timestamp_ns,current_socket_power_W,inst_power_W,gfx_clock_MHz\n";
++  std::cout << "timestamp_ns,current_socket_power_W,inst_power_W,gfx_clock_MHz,"
++                "edge_temp_C,hotspot_temp_C\n";
+ 
+   int sample_idx = 0;
+   while (!g_stop_requested.load() &&
+@@ -204,12 +205,33 @@ int main(int argc, char **argv) {
+       gfx_clock_mhz = (raw > 1.0e6) ? (raw / 1.0e6) : raw;
+     }
+ 
++    // Temperature sensors are queried best-effort: unlike energy/power/clock
++    // above, a failure here (unsupported sensor on some ASICs) shouldn't kill
++    // an otherwise-healthy profiling run, so we fall back to NaN instead of
++    // breaking the sampling loop.
++    double edge_temp_c = std::numeric_limits<double>::quiet_NaN();
++    int64_t edge_temp = 0;
++    if (amdsmi_get_temp_metric(handle, AMDSMI_TEMPERATURE_TYPE_EDGE,
++                                AMDSMI_TEMP_CURRENT, &edge_temp) ==
++        AMDSMI_STATUS_SUCCESS) {
++      edge_temp_c = static_cast<double>(edge_temp);
++    }
++
++    double hotspot_temp_c = std::numeric_limits<double>::quiet_NaN();
++    int64_t hotspot_temp = 0;
++    if (amdsmi_get_temp_metric(handle, AMDSMI_TEMPERATURE_TYPE_HOTSPOT,
++                                AMDSMI_TEMP_CURRENT, &hotspot_temp) ==
++        AMDSMI_STATUS_SUCCESS) {
++      hotspot_temp_c = static_cast<double>(hotspot_temp);
++    }
++
+     if (g_stop_requested.load()) {
+       break;
+     }
+ 
+     std::cout << ts << "," << curr_socket_power_w << "," << inst_power_w
+-              << "," << gfx_clock_mhz << '\n';
++              << "," << gfx_clock_mhz << "," << edge_temp_c << ","
++              << hotspot_temp_c << '\n';
+     std::cout.flush();
+ 
+     prev_energy = energy;

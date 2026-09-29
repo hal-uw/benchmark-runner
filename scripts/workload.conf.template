@@ -32,8 +32,10 @@ SAMPLE_GPUS=0                        # 8 GPUs: 0,1,2,3,4,5,6,7
 MODULES=(rocm/7.2.0)                 # module load, in order
 ROCM_PATH=/opt/rocm-7.2.0
 
-# Power/frequency/temperature sampler (rocprofwrap_lt: wrapper.py + amd-smi-query)
-PROF_LT=/work1/sinclair/sairajatg/minos-sigmetrics26-artifact/rocprofwrap/rocprofwrap_lt
+# Power/frequency/temperature sampler (rocprofwrap_lt: wrapper.py + amd-smi-query).
+# Bundled in the skill repo; build amd-smi-query there once:
+#   make -C <repo>/third_party/rocprofwrap_lt ROCM_DIR=/opt/rocm-7.2.0
+PROF_LT=/path/to/benchmark-runner/third_party/rocprofwrap_lt
 SAMPLE_MS=1                          # requested interval; ~2.3 ms is achieved in practice
 
 # Files that must exist before anything runs (binary, inputs, ...)

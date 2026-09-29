@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Build a simple JSON of binned telemetry vectors for one power run.
 
-The inst_power vector comes from calculate_power_distribution() in
-minos-analysis/dendrogram_plot/dendrogram.py itself (raw 1 ms-requested samples,
-no smoothing, power/TDP, samples >= 0.5 TDP, bins np.arange(0.5, 2.05, bin_size)).
-The other quantities are binned with the same algorithm over their own ranges
-(the ranges used by build_workload_vectors.py).
+Every vector is binned with the algorithm of calculate_power_distribution() in
+minos-analysis/dendrogram_plot/dendrogram.py (raw 1 ms-requested samples, no
+smoothing, value/reference, samples >= the first edge, bins np.arange(lo, hi,
+step)); inst_power uses dendrogram.py's own range (0.5-2.0 x TDP, bin_size 0.1).
+The other quantities use the ranges of build_workload_vectors.py.
+
+dendrogram.py is optional. With --dendrogram-dir (or $DENDROGRAM_DIR) the
+inst_power vector is also computed by dendrogram.py itself and must match the
+built-in one; without it the built-in vector is used and the JSON says no
+cross-check was run.
 
 Samples are kept only inside the kernel window [first kernel start, last kernel
 end] from the rocprofv3 kernel trace of the same run; the sampler and rocprofv3
@@ -16,6 +21,8 @@ pool the samples of all GPUs (each GPU-sample counts once); --per-gpu also write
 <name>_gpu<N> vectors. The kernel window spans all kernel-trace files.
 
   python3 build_sampling_json.py results/prof-433930 --label "LAMMPS 16x8x12"
+  python3 build_sampling_json.py results/prof-433930 --label "LAMMPS 16x8x12" \
+      --dendrogram-dir /path/to/minos-analysis/dendrogram_plot
 """
 import argparse
 import glob
@@ -27,8 +34,8 @@ import tempfile
 import numpy as np
 import pandas as pd
 
-DENDRO_DIR = "/work1/sinclair/sairajatg/minos-analysis/dendrogram_plot"   # --dendrogram-dir
 TDP_W = 750.0     # MI300X; dendrogram.py default
+BIN_SIZE = 0.1    # dendrogram.py bin_size (power bins, fraction of TDP)
 
 # name in JSON -> (CSV column, reference, lo, hi, step, unit)
 # hi is exclusive as in np.arange, so the last edge is hi - step.
@@ -75,11 +82,19 @@ def main():
     ap.add_argument("--out", help="output JSON (default: <run_dir>/sampling_vectors.json)")
     ap.add_argument("--no-trim", action="store_true", help="keep all samples, not just the kernel window")
     ap.add_argument("--per-gpu", action="store_true", help="also write <name>_gpu<N> vectors (multi-GPU runs)")
-    ap.add_argument("--dendrogram-dir", default=DENDRO_DIR, help=f"folder with dendrogram.py (default {DENDRO_DIR})")
+    ap.add_argument("--dendrogram-dir", default=os.environ.get("DENDROGRAM_DIR"),
+                    help="folder with minos-analysis dendrogram.py, to cross-check inst_power "
+                         "(default $DENDROGRAM_DIR; unset = no cross-check)")
     args = ap.parse_args()
 
-    sys.path.insert(0, args.dendrogram_dir)
-    import dendrogram  # noqa: E402
+    dendrogram = None
+    if args.dendrogram_dir:
+        if not os.path.isfile(os.path.join(args.dendrogram_dir, "dendrogram.py")):
+            raise SystemExit(f"no dendrogram.py in {args.dendrogram_dir}")
+        sys.path.insert(0, args.dendrogram_dir)
+        import dendrogram  # noqa: E402
+        if abs(dendrogram.bin_size - BIN_SIZE) > 1e-12:
+            raise SystemExit(f"dendrogram.py bin_size {dendrogram.bin_size} != {BIN_SIZE}")
 
     run_dir = os.path.abspath(args.run_dir)
     tels = sorted(glob.glob(os.path.join(run_dir, "profiling_result_*.csv")))
@@ -124,13 +139,13 @@ def main():
         if col not in df.columns:
             skipped[name] = f"column {col} not in CSV"
             continue
-        step = step if step is not None else dendrogram.bin_size
+        step = step if step is not None else BIN_SIZE
         vec, edges, n_pop, n_above = bin_vector(df[col], refv, lo, hi, step)
         if vec is None:
             skipped[name] = f"no valid samples in {col} (sensor not exposed: all nan)" \
                 if df[col].isna().all() else f"no samples >= {lo}"
             continue
-        if name == "inst_power":
+        if name == "inst_power" and dendrogram is not None:
             dvec = dendrogram_power_vector(dendrogram, df, args.label)
             if len(dvec) != len(vec) or max(abs(a - b) for a, b in zip(dvec, vec)) > 1e-4:
                 raise SystemExit(f"inst_power mismatch vs dendrogram.py:\n{dvec}\n{vec}")
@@ -176,9 +191,15 @@ def main():
                 "histogram over np.arange(lo, hi, step) (hi exclusive); each entry = fraction of "
                 "kept samples in [edge_i, edge_i+1), rounded to 4 decimals. Samples at or above "
                 "the last edge are kept but fall in no bin, so a vector can sum to < 1. "
-                f"inst_power is produced by dendrogram.py itself (bin_size = {dendrogram.bin_size}, "
-                f"TDP = {TDP_W:.0f} W), so it is directly comparable with app_vectors.json. "
+                f"inst_power and socket_power use dendrogram.py's range and bin_size ({BIN_SIZE}, "
+                f"TDP = {TDP_W:.0f} W), so inst_power is directly comparable with app_vectors.json. "
                 "gfx_frequency and hotspot_temp use the ranges from build_workload_vectors.py."),
+            "cross_check": (
+                f"inst_power recomputed by calculate_power_distribution() in "
+                f"{os.path.abspath(args.dendrogram_dir)}/dendrogram.py and matched within 1e-4"
+                if dendrogram is not None else
+                "none: dendrogram.py not given (--dendrogram-dir / $DENDROGRAM_DIR); "
+                "inst_power from the built-in binning, which implements the same algorithm"),
             "samples": {"total_in_files": int(len(df_all)), "used": int(len(df))},
             "bins": bins,
             "skipped": skipped,
